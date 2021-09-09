@@ -1,51 +1,48 @@
 import time
 from django.test import TestCase
 from rest_framework.test import APIClient
+from .redis_client import redis_client
 
 
 class TestApi(TestCase):
     def setUp(self) -> None:
         self.client = APIClient()
-
-    def test_can_post_links_and_retrieve_domains(self):
-        data = {
+        redis_client.flushdb()
+        self.data = {
             "links": [
                 "https://ya.ru",
                 "https://ya.ru?q=123",
                 "funbox.ru",
-                "https://stackoverflow.com/questions/11828270/how-to-exit-the-vim-editor"
-            ]
-        }
-        data2 = {
-            "links": [
-                "https://funbox.ru/q/python.pdf",
+                "https://stackoverflow.com/questions/11828270/how-to-exit-the-vim-editor",
                 "https://www.google.com/search?q=hello+world&oq=hello+world",
                 "github.com/Chernickk/funbox"
             ]
         }
 
+    def test_can_post_links(self):
+        response = self.client.post('http://127.0.0.1:8000/visited_links/',
+                                    data=self.data,
+                                    format='json',
+                                    follow=True)
+
+        links = [link for key in redis_client.keys() for link in redis_client.lrange(key, 0, 1)]
+
+        self.assertEqual(set(self.data['links']), set(links))
+        self.assertEqual(response.data['status'], "ok")
+
+    def test_can_retrieve_domains(self):
         post_time = time.time()
-        response = self.client.post('http://127.0.0.1:8000/visited_links/', data=data, format='json', follow=True)
-        self.assertEqual(response.data['status'], 'ok')
-        time.sleep(0.1)
 
-        post_time_2 = time.time()
-        response = self.client.post('http://127.0.0.1:8000/visited_links/', data=data2, format='json', follow=True)
-        self.assertEqual(response.data['status'], 'ok')
+        [redis_client.lpush(post_time, link) for link in self.data['links']]
 
-        response = self.client.get('http://127.0.0.1:8000/visited_domains', follow=True)
-        self.assertEqual(response.data['domains'],
-                         {'ya.ru', 'funbox.ru', 'stackoverflow.com', 'google.com', 'github.com'})
-        self.assertEqual(response.data['status'], 'ok')
-
-        response = self.client.get(f'http://127.0.0.1:8000/visited_domains?from={post_time}&to={post_time + 0.05}',
+        response = self.client.get(f'http://127.0.0.1:8000/visited_domains?from={post_time - 1}&to={post_time + 1}',
                                    follow=True)
-        self.assertEqual(response.data['domains'],
-                         {'ya.ru', 'funbox.ru', 'stackoverflow.com'})
+
+        self.assertEqual(
+            set(response.data['domains']),
+            {'ya.ru', 'funbox.ru', 'stackoverflow.com', 'google.com', 'github.com'}
+        )
         self.assertEqual(response.data['status'], 'ok')
 
-        response = self.client.get(f'http://127.0.0.1:8000/visited_domains?from={post_time_2}&to={post_time_2 + 0.05}',
-                                   follow=True)
-        self.assertEqual(response.data['domains'],
-                         {'funbox.ru', 'google.com', 'github.com'})
-        self.assertEqual(response.data['status'], 'ok')
+    def tearDown(self) -> None:
+        redis_client.flushdb()

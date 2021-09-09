@@ -1,52 +1,62 @@
-import json
-import redis
 import time
 import tldextract
-from django.conf import settings
+from redis.exceptions import RedisError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-redis_instance = redis.StrictRedis(
-    host=settings.REDIS_HOST,
-    port=settings.REDIS_PORT,
-    db=0,
-    decode_responses=True
-)
+from .redis_client import redis_client
 
 
 class VisitedLinks(APIView):
+    """
+    endpoint to post visited links
+    valid format:
+      {
+        "links": [
+            "https://ya.ru",
+            "https://ya.ru?q=123",
+            "funbox.ru",
+            "https://stackoverflow.com/questions/11828270/how-to-exit-the-vim-editor"
+        ]
+      }
+    """
     def post(self, request):
         try:
-            items = json.loads(self.request.body)
+            items = request.data
             for link in items['links']:
-                redis_instance.set(time.time(), link)
+                redis_client.lpush(time.time(), link)
 
-        except redis.exceptions.RedisError as e:
-            return Response({'status': 'redis error'})
+        except RedisError as error:
+            return Response({'status': f'redis error: {error}'}, status=500)
 
-        else:
-            return Response({'status': 'ok'})
+        return Response({'status': 'ok'})
 
 
 class VisitedDomains(APIView):
+    """
+    endpoint to get unique visited domains for given time interval
+
+    from_time and to_time should be in unix-time format
+    """
     def get(self, request):
         try:
-            from_time = self.request.query_params.get('from') or 0
-            to_time = self.request.query_params.get('to') or 'inf'
-            domains = set()
-            for key in redis_instance.keys():
-                if float(from_time) <= float(key) <= float(to_time):
-                    parsed_url = tldextract.extract(redis_instance[key])
-                    domains.add(f'{parsed_url.domain}.{parsed_url.suffix}')
+            from_time = request.query_params.get('from', 0)
+            to_time = request.query_params.get('to', 'inf')
 
-        except redis.exceptions.RedisError as e:
-            return Response({'status': 'redis error'})
+            parsed_links = [tldextract.extract(link) for key in redis_client.keys()
+                            if float(from_time) <= float(key) <= float(to_time)
+                            for link in redis_client.lrange(key, 0, -1)]
 
-        except ValueError as e:
-            return Response({'status': 'invalid request'})
+            domains = {f'{parsed_link.domain}.{parsed_link.suffix}' for parsed_link in parsed_links}
 
-        else:
-            return Response({'domains': domains,
-                             'status': 'ok'})
+        except RedisError as error:
+            return Response({'status': f'redis error: {error}'}, status=500)
 
+        except ValueError as error:
+            return Response({'status': f'invalid request: {error}'}, status=400)
 
+        except Exception as error:
+            return Response({'status': f'unknown error: {error}'}, status=500)
+
+        return Response({'domains': domains,
+                         'status': 'ok'})
