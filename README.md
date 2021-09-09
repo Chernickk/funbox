@@ -9,4 +9,7 @@ python3 manage.py test --settings=funbox.test_settings
 pip3 install -r requirements.txt \
 python3 manage.py runserver
 
-## run prod server
+## minimum for run prod server
+
+pip3 install gunicorn \
+gunicorn funbox.wsgi
